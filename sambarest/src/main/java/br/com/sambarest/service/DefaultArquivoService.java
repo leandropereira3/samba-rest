@@ -3,7 +3,14 @@
  */
 package br.com.sambarest.service;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -12,14 +19,26 @@ import javax.ws.rs.Path;
 import javax.ws.rs.Produces;
 import javax.ws.rs.core.MediaType;
 
+import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.methods.HttpPost;
+import org.apache.http.entity.StringEntity;
+import org.apache.http.impl.client.DefaultHttpClient;
+import org.codehaus.jettison.json.JSONArray;
+import org.codehaus.jettison.json.JSONObject;
+
 import br.com.sambarest.model.Arquivo;
 import br.com.sambarest.util.ParametersUtil;
 
 import com.amazonaws.auth.BasicAWSCredentials;
 import com.amazonaws.services.s3.AmazonS3;
 import com.amazonaws.services.s3.AmazonS3Client;
+import com.amazonaws.services.s3.model.CannedAccessControlList;
+import com.amazonaws.services.s3.model.DeleteObjectRequest;
 import com.amazonaws.services.s3.model.ListObjectsV2Request;
 import com.amazonaws.services.s3.model.ListObjectsV2Result;
+import com.amazonaws.services.s3.model.PutObjectRequest;
+import com.amazonaws.services.s3.model.PutObjectResult;
 import com.amazonaws.services.s3.model.S3ObjectSummary;
 
 /**
@@ -40,6 +59,7 @@ public class DefaultArquivoService {
 	static final String READ_PERMISSION = "READ";
 	static final Integer ONE_MB = 1000000;
 
+	@Path("/get")
 	@GET
     @Produces({ MediaType.APPLICATION_XML, MediaType.APPLICATION_JSON })
 	public List<Arquivo> listAll() {
@@ -66,6 +86,94 @@ public class DefaultArquivoService {
 
 		return arquivos;
 	}	
+	
+	public void uploadFile(File file) throws IOException {
+		System.out.println("file" + file);
+		File newFile = new File(getTempDir() + file.getName());
+
+		// Cria um arquivo no diretorio temp com os dados do arquivo enviado
+		InputStream inputStream = new FileInputStream(file);
+		OutputStream outputStream = new FileOutputStream(newFile);
+		byte[] buffer = new byte[10 * 1024];
+		for (int length; (length = inputStream.read(buffer)) != -1;) {
+			outputStream.write(buffer, 0, length);
+			outputStream.flush();
+		}
+
+		insertFile(newFile);
+	}
+
+	/**
+	 * Insere o arquivo no S3
+	 */
+	public PutObjectResult insertFile(File file) {
+		AmazonS3 s3Client = buildS3Client();
+
+		PutObjectRequest objRequest = new PutObjectRequest(
+				ParametersUtil.recupera(PARAM_BUCKET_NAME), file.getName(),
+				file);
+		objRequest.setCannedAcl(CannedAccessControlList.PublicRead);
+		PutObjectResult result = s3Client.putObject(objRequest);
+		return result;
+	}
+	
+	public void excluir(Arquivo selectedArquivo) {
+		AmazonS3 s3Client = buildS3Client();
+		s3Client.deleteObject(new DeleteObjectRequest(ParametersUtil
+				.recupera(PARAM_BUCKET_NAME), selectedArquivo.getKey()));
+	}
+	
+	public String getUrlFile(Arquivo arquivo) {
+		try {
+			@SuppressWarnings({ "deprecation", "resource" })
+			HttpClient client = new DefaultHttpClient();
+			HttpPost post = new HttpPost(
+					ParametersUtil.recupera(PARAM_ZENCODER_URL));
+			// add header
+			post.setHeader("Content-Type", "application/json");
+			post.setHeader("Zencoder-Api-Key",
+					ParametersUtil.recupera(PARAM_ZENCODER_KEY));
+
+			JSONObject jsonObject = new JSONObject();
+			JSONArray outputs = new JSONArray();
+			JSONObject jsonAccessControl = new JSONObject();
+			jsonAccessControl.put("permission", READ_PERMISSION);
+			jsonAccessControl.put("grantee",
+					ParametersUtil.recupera(PARAM_ZENCODER_GRANTEE));
+			outputs.put(jsonAccessControl);
+			jsonObject.put("test", "true");
+			jsonObject.put("input", ParametersUtil.recupera(PARAM_BUCKET_URL)
+					+ arquivo.getKey());
+			jsonObject.put("outputs", outputs);
+
+			StringEntity se = new StringEntity(jsonObject.toString());
+			post.setEntity(se);
+
+			HttpResponse response = client.execute(post);
+
+			BufferedReader rd = new BufferedReader(new InputStreamReader(
+					response.getEntity().getContent()));
+
+			StringBuffer result = new StringBuffer();
+			String line = "";
+			while ((line = rd.readLine()) != null) {
+				result.append(line);
+			}
+
+			JSONObject obj = new JSONObject(result.toString());
+			JSONArray outputsResponse = new JSONArray(obj.get("outputs")
+					.toString());
+			if (outputsResponse.length() > 0) {
+				JSONObject resultado = outputsResponse.getJSONObject(0);
+				return resultado.getString("url");
+			}
+
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+		return null;
+	}
+	
 	
 	/**
 	 * Obtem diretorio temporario do ambiente.
