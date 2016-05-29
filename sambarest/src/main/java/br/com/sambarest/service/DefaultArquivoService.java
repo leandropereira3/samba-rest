@@ -5,19 +5,21 @@ package br.com.sambarest.service;
 
 import java.io.BufferedReader;
 import java.io.File;
-import java.io.FileInputStream;
 import java.io.FileOutputStream;
-import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
 
+import javax.ws.rs.Consumes;
 import javax.ws.rs.GET;
+import javax.ws.rs.POST;
 import javax.ws.rs.Path;
+import javax.ws.rs.PathParam;
 import javax.ws.rs.Produces;
 import javax.ws.rs.core.MediaType;
+import javax.ws.rs.core.Response;
 
 import org.apache.http.HttpResponse;
 import org.apache.http.client.HttpClient;
@@ -26,6 +28,7 @@ import org.apache.http.entity.StringEntity;
 import org.apache.http.impl.client.DefaultHttpClient;
 import org.codehaus.jettison.json.JSONArray;
 import org.codehaus.jettison.json.JSONObject;
+import org.glassfish.jersey.media.multipart.FormDataParam;
 
 import br.com.sambarest.model.Arquivo;
 import br.com.sambarest.util.ParametersUtil;
@@ -58,6 +61,39 @@ public class DefaultArquivoService {
 	static final String PARAM_ZENCODER_GRANTEE = "zencodergrantee";
 	static final String READ_PERMISSION = "READ";
 	static final Integer ONE_MB = 1000000;
+	
+	@POST
+	@Path("/upload")
+	@Consumes(MediaType.MULTIPART_FORM_DATA)
+	public Response upload(@FormDataParam("file") InputStream uploadedInputStream,  
+            @FormDataParam("file") org.glassfish.jersey.media.multipart.FormDataContentDisposition fileDetail){
+		
+		Response response = null;
+		System.out.println(uploadedInputStream);		
+		 
+		System.out.println("file" + fileDetail.getFileName());
+		File newFile = new File(getTempDir() + fileDetail.getFileName());
+
+		// Cria um arquivo no diretorio temp com os dados do arquivo enviado
+		InputStream inputStream = uploadedInputStream;
+		try{
+			OutputStream outputStream = new FileOutputStream(newFile);
+			byte[] buffer = new byte[10 * 1024];
+			for (int length; (length = inputStream.read(buffer)) != -1;) {
+				outputStream.write(buffer, 0, length);
+				outputStream.flush();
+			}
+
+			insertFile(newFile);			
+			response = Response.status(200).entity("Arquivo enviado com sucesso!").build(); 
+		}
+		catch(Exception e){
+			e.printStackTrace();
+			response = Response.status(200).entity("Falha ao enviar arquivo!").build();
+		}		
+		
+		return response;
+	}	
 
 	@Path("/get")
 	@GET
@@ -87,21 +123,6 @@ public class DefaultArquivoService {
 		return arquivos;
 	}	
 	
-	public void uploadFile(File file) throws IOException {
-		System.out.println("file" + file);
-		File newFile = new File(getTempDir() + file.getName());
-
-		// Cria um arquivo no diretorio temp com os dados do arquivo enviado
-		InputStream inputStream = new FileInputStream(file);
-		OutputStream outputStream = new FileOutputStream(newFile);
-		byte[] buffer = new byte[10 * 1024];
-		for (int length; (length = inputStream.read(buffer)) != -1;) {
-			outputStream.write(buffer, 0, length);
-			outputStream.flush();
-		}
-
-		insertFile(newFile);
-	}
 
 	/**
 	 * Insere o arquivo no S3
@@ -123,8 +144,15 @@ public class DefaultArquivoService {
 				.recupera(PARAM_BUCKET_NAME), selectedArquivo.getKey()));
 	}
 	
-	public String getUrlFile(Arquivo arquivo) {
-		try {
+	@Path("/urlvideo/{param}")
+	@GET
+	@Produces({ MediaType.TEXT_PLAIN })
+	@Consumes(MediaType.APPLICATION_JSON)
+	public String getUrlFile(@PathParam("param") String param) {
+		String key = param;		
+		Response retorno = null;
+		String ret = null;
+		try {						
 			@SuppressWarnings({ "deprecation", "resource" })
 			HttpClient client = new DefaultHttpClient();
 			HttpPost post = new HttpPost(
@@ -143,7 +171,7 @@ public class DefaultArquivoService {
 			outputs.put(jsonAccessControl);
 			jsonObject.put("test", "true");
 			jsonObject.put("input", ParametersUtil.recupera(PARAM_BUCKET_URL)
-					+ arquivo.getKey());
+					+ key);
 			jsonObject.put("outputs", outputs);
 
 			StringEntity se = new StringEntity(jsonObject.toString());
@@ -165,13 +193,15 @@ public class DefaultArquivoService {
 					.toString());
 			if (outputsResponse.length() > 0) {
 				JSONObject resultado = outputsResponse.getJSONObject(0);
-				return resultado.getString("url");
+				ret = resultado.getString("url");
+				retorno = Response.status(200).entity(resultado.getString("url")).build();		
 			}
 
 		} catch (Exception e) {
 			e.printStackTrace();
+			retorno = Response.status(200).entity("Falha ao obter endereço do vídeo.").build();
 		}
-		return null;
+		return ret;
 	}
 	
 	
